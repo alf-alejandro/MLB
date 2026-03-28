@@ -86,10 +86,11 @@ _spec = _ilu.spec_from_file_location(
 _mlb_poly = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(_mlb_poly)
 
-obtener_partidos_hoy    = _mlb_poly.obtener_partidos_hoy
+obtener_partidos_hoy     = _mlb_poly.obtener_partidos_hoy
 obtener_precios_paralelo = _mlb_poly.obtener_precios_paralelo
-hora_et                 = _mlb_poly.hora_et
-centavos                = _mlb_poly.centavos
+hora_et                  = _mlb_poly.hora_et
+centavos                 = _mlb_poly.centavos
+diagnosticar_api         = _mlb_poly.diagnosticar_api
 
 # ── Gemini AI ─────────────────────────────────────────────────────────────────
 
@@ -344,26 +345,44 @@ def calcular_mea(ai: dict, precio_home: float, precio_away: float,
 # ── Output ─────────────────────────────────────────────────────────────────────
 
 def _extraer_equipos(partido: dict) -> tuple[str, str]:
-    """Extrae (home, away) del partido Polymarket."""
+    """
+    Extrae (home, away) del partido.
+    En MLB Polymarket el primer outcome suele ser el equipo visitante
+    y el segundo el local, pero la pregunta dice "Will X beat Y?" → X=away, Y=home.
+    Usamos los tokens tal como vienen: tokens[0]=equipo_A, tokens[1]=equipo_B.
+    El equipo LOCAL normalmente es el segundo en "X @ Y" o viene mencionado segundo.
+    """
     ml = partido.get("moneyline", {})
     if ml:
         tokens = ml.get("tokens", [])
         if len(tokens) >= 2:
-            # Heurística: el token con "home" en outcome o el primero
-            home_tok = next((t for t in tokens if "home" in t["equipo"].lower()), tokens[0])
-            away_tok = next((t for t in tokens if t != home_tok), tokens[1])
-            return home_tok["equipo"], away_tok["equipo"]
+            # Intentar detectar local por pregunta ("beat the X" → X es local)
+            pregunta = ml.get("pregunta", "").lower()
+            t0, t1 = tokens[0]["equipo"], tokens[1]["equipo"]
+
+            # "Will [away] beat the [home]?" o "Will [away] beat [home]?"
+            # El equipo mencionado DESPUÉS de "beat" es el local
+            m = re.search(r"beat(?: the)? (.+?)(?:\?|$)", pregunta, re.IGNORECASE)
+            if m:
+                probable_home = m.group(1).strip().lower()
+                if probable_home in t1.lower():
+                    return t1, t0  # (home, away)
+                if probable_home in t0.lower():
+                    return t0, t1
+
+            return tokens[1]["equipo"], tokens[0]["equipo"]  # convención: [1]=home
     return "Team A", "Team B"
 
 
-def _tokens_moneyline(partido: dict) -> tuple[str, str]:
+def _tokens_moneyline(partido: dict) -> tuple[str | None, str | None]:
     """Devuelve (token_id_home, token_id_away) del mercado moneyline."""
     ml = partido.get("moneyline", {})
     if ml:
         tokens = ml.get("tokens", [])
         if len(tokens) >= 2:
-            home_tok = next((t for t in tokens if "home" in t["equipo"].lower()), tokens[0])
-            away_tok = next((t for t in tokens if t != home_tok), tokens[1])
+            home, away = _extraer_equipos(partido)
+            home_tok = next((t for t in tokens if t["equipo"] == home), tokens[1])
+            away_tok = next((t for t in tokens if t["equipo"] == away), tokens[0])
             return home_tok["token_id"], away_tok["token_id"]
     return None, None
 
@@ -415,17 +434,18 @@ def main():
 
     if not partidos:
         print("  Sin partidos MLB disponibles para hoy.")
+        print()
+        diagnosticar_api()
+        print()
+        print("  ℹ️  El bot funcionará automáticamente cuando Polymarket")
+        print("      publique los mercados MLB (normalmente 1-3 días antes")
+        print("      de cada partido). Vuelve a intentarlo más tarde.")
         return
 
-    print(f"  Encontrados {len(partidos)} partido(s) con mercado moneyline.\n")
+    print(f"  Encontrados {len(partidos)} partido(s).\n")
 
     # ── 2) Traer precios CLOB en paralelo ─────────────────────────────────────
-    all_tokens = []
-    for p in partidos:
-        for cat in ("moneyline", "runline", "totals"):
-            m = p.get(cat)
-            if m:
-                all_tokens += [t["token_id"] for t in m["tokens"]]
+    all_tokens = [t["token_id"] for p in partidos for t in p["moneyline"]["tokens"]]
 
     print(f"💰  Trayendo precios para {len(all_tokens)} tokens (paralelo)...")
     precios = obtener_precios_paralelo(list(set(all_tokens)))

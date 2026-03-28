@@ -143,43 +143,27 @@ def _fetch_eventos_mlb() -> list[dict]:
 
 # ── CLOB API — precios en paralelo ─────────────────────────────────────────────
 
-def precio_clob(token_id: str) -> float | None:
-    """Devuelve mid-price (0.0–1.0) de un token en Polymarket CLOB."""
+def precio_clob(token_id: str) -> tuple[str, float | None]:
+    """Devuelve (token_id, mid-price) — se llama en paralelo."""
     try:
-        resp = SESSION.get(f"{CLOB_API}/midpoints",
+        resp = SESSION.get(f"{CLOB_API}/midpoint",
                            params={"token_id": token_id}, timeout=8)
         resp.raise_for_status()
-        data = resp.json()
-        mid  = data.get("mid") or data.get("midpoint") or data.get(token_id)
-        if mid is not None:
-            return float(mid)
-        # fallback: book
-        resp2 = SESSION.get(f"{CLOB_API}/book",
-                            params={"token_id": token_id}, timeout=8)
-        resp2.raise_for_status()
-        book = resp2.json()
-        bids = book.get("bids", [])
-        asks = book.get("asks", [])
-        if bids and asks:
-            return (float(bids[0]["price"]) + float(asks[0]["price"])) / 2
+        mid = resp.json().get("mid")
+        return token_id, float(mid) if mid is not None else None
     except Exception:
-        pass
-    return None
+        return token_id, None
 
 
-def obtener_precios_paralelo(token_ids: list[str], workers: int = 25) -> dict[str, float]:
+def obtener_precios_paralelo(token_ids: list[str], workers: int = 20) -> dict[str, float]:
     """Trae precios de múltiples tokens en paralelo."""
     precios = {}
     with ThreadPoolExecutor(max_workers=workers) as exe:
         futuros = {exe.submit(precio_clob, tid): tid for tid in token_ids}
         for fut in as_completed(futuros):
-            tid = futuros[fut]
-            try:
-                p = fut.result()
-                if p is not None:
-                    precios[tid] = p
-            except Exception:
-                pass
+            tid, precio = fut.result()
+            if precio is not None:
+                precios[tid] = precio
     return precios
 
 

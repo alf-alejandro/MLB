@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MLB Edge Alpha Bot</title>
+  <style>
+    :root {
+      --bg:      #0d1117;
+      --card:    #161b22;
+      --border:  #30363d;
+      --accent:  #e05c00;
+      --green:   #3fb950;
+      --yellow:  #d29922;
+      --red:     #f85149;
+      --blue:    #58a6ff;
+      --text:    #e6edf3;
+      --muted:   #8b949e;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    header {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 28px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 { font-size: 1.3rem; font-weight: 700; color: var(--accent); }
+    header span { font-size: 0.8rem; color: var(--muted); }
+    .badge {
+      margin-left: auto;
+      background: #1a2332;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 3px 10px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    /* ── Layout ── */
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px;
+    }
+    .card h2 {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    /* ── Fórmula ── */
+    .formula {
+      background: #0d1f33;
+      border: 1px solid #1f3a5c;
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-family: 'Courier New', monospace;
+      font-size: 0.82rem;
+      line-height: 1.7;
+      color: var(--blue);
+      margin-bottom: 20px;
+    }
+    .formula b { color: var(--accent); }
+
+    /* ── Botón ── */
+    #btnRun {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 24px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s;
+    }
+    #btnRun:disabled { opacity: .5; cursor: not-allowed; }
+    #btnRun:hover:not(:disabled) { opacity: .85; }
+
+    /* ── Log panel ── */
+    #logPanel {
+      background: #090d12;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px;
+      height: 420px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      line-height: 1.5;
+    }
+    #logPanel .line { padding: 1px 0; white-space: pre-wrap; word-break: break-word; }
+    .line-scalp  { color: #ffd700; }
+    .line-win    { color: var(--green); }
+    .line-buy    { color: var(--blue); }
+    .line-warn   { color: var(--yellow); }
+    .line-err    { color: var(--red); }
+    .line-info   { color: var(--muted); }
+
+    /* ── Resultados ── */
+    .partido-card {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+    .partido-title {
+      font-weight: 700;
+      font-size: 1rem;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .stat-box {
+      background: var(--card);
+      border-radius: 6px;
+      padding: 10px 12px;
+    }
+    .stat-label { font-size: 0.72rem; color: var(--muted); margin-bottom: 4px; }
+    .stat-row { display: flex; justify-content: space-between; font-size: 0.85rem; }
+    .stat-home { color: var(--blue); }
+    .stat-away { color: var(--yellow); }
+
+    /* MEA colors */
+    .mea-pos  { color: var(--red); }
+    .mea-neg  { color: var(--green); }
+    .mea-zero { color: var(--muted); }
+
+    /* Signals */
+    .señal {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      margin: 3px 4px 3px 0;
+    }
+    .señal-scalp  { background: #2a2000; border: 1px solid #ffd700; color: #ffd700; }
+    .señal-win    { background: #0d2818; border: 1px solid var(--green); color: var(--green); }
+    .señal-buy    { background: #0d1f33; border: 1px solid var(--blue); color: var(--blue); }
+    .señal-none   { background: #1a0d0d; border: 1px solid var(--red); color: var(--red); }
+
+    .notas-box {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: #0d1117;
+      border-left: 2px solid var(--border);
+    }
+
+    /* ── Calculadora ── */
+    .calc-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .calc-row label { font-size: 0.85rem; color: var(--muted); min-width: 130px; }
+    .calc-row input {
+      background: #090d12;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 6px 10px;
+      font-size: 0.9rem;
+      width: 120px;
+    }
+    .calc-row .calc-result {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .reserve-note { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+
+    #noResultados { color: var(--muted); font-size: 0.85rem; }
+
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>⚾</div>
+  <div>
+    <h1>MLB Edge Alpha Bot</h1>
+    <span>MEA = P_Poly − Valor_Real &nbsp;|&nbsp; Powered by Gemini AI + Polymarket</span>
+  </div>
+  <div class="badge" id="dateBadge"></div>
+</header>
+
+<div class="container">
+
+  <!-- Fórmula -->
+  <div class="formula">
+    <b>Fórmula MEA (MLB Edge Alpha):</b><br>
+    valor_raw &nbsp;= 0.50·P_Vegas + 0.25·ERA_norm + 0.15·Racha + (±4 local)<br>
+    penalización = −12% si as ausente &nbsp;|&nbsp; −7% si titular ausente<br>
+    valor_real &nbsp;= normalizado a 100 entre ambos equipos<br>
+    <b>MEA &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;= P_Poly − valor_real</b>
+  </div>
+
+  <!-- Grid principal -->
+  <div class="grid">
+
+    <!-- Panel izquierdo: controles + log -->
+    <div>
+      <div class="card" style="margin-bottom:20px;">
+        <h2>Control</h2>
+        <button id="btnRun" onclick="runAnalysis()">
+          <span id="btnIcon">▶</span>
+          Analizar partidos de hoy
+        </button>
+        <p style="margin-top:10px;font-size:0.8rem;color:var(--muted)" id="statusTxt">
+          Listo para analizar.
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Log en tiempo real</h2>
+        <div id="logPanel"></div>
+      </div>
+    </div>
+
+    <!-- Panel derecho: calculadora + resultados -->
+    <div>
+      <div class="card" style="margin-bottom:20px;">
+        <h2>Calculadora de apuestas</h2>
+        <div class="calc-row">
+          <label>Bankroll total ($)</label>
+          <input type="number" id="bankroll" value="1000" oninput="calcBet()" />
+        </div>
+        <div class="calc-row">
+          <label>% a apostar</label>
+          <input type="number" id="pctBet" value="10" min="1" max="34" oninput="calcBet()" />
+          <span class="calc-result" id="betAmt">$100</span>
+        </div>
+        <div class="calc-row">
+          <label>Precio Polymarket (¢)</label>
+          <input type="number" id="polyPrice" value="55" min="1" max="99" oninput="calcBet()" />
+          <span class="calc-result" id="potGain">+$82</span>
+        </div>
+        <p class="reserve-note">
+          ⚠ Máximo 34% del bankroll por apuesta &nbsp;|&nbsp; Reserva mínima 33%
+        </p>
+      </div>
+
+      <div class="card">
+        <h2>Partidos analizados</h2>
+        <div id="resultadosPanel">
+          <p id="noResultados">Ejecuta el análisis para ver oportunidades.</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  // ── Fecha ──────────────────────────────────────────────────────────────────
+  const today = new Date();
+  document.getElementById("dateBadge").textContent =
+    today.toLocaleDateString("es-MX", { weekday:"short", month:"short", day:"numeric" }).toUpperCase();
+
+  // ── Calculadora ────────────────────────────────────────────────────────────
+  function calcBet() {
+    const bank  = parseFloat(document.getElementById("bankroll").value) || 0;
+    const pct   = Math.min(34, parseFloat(document.getElementById("pctBet").value) || 0);
+    const price = parseFloat(document.getElementById("polyPrice").value) || 50;
+    const bet   = bank * pct / 100;
+    const profit = bet * (100 / price - 1);
+    document.getElementById("betAmt").textContent  = "$" + bet.toFixed(0);
+    document.getElementById("potGain").textContent = "+" + "$" + profit.toFixed(0);
+  }
+  calcBet();
+
+  // ── Log helper ─────────────────────────────────────────────────────────────
+  function appendLog(text) {
+    const panel = document.getElementById("logPanel");
+    const div = document.createElement("div");
+    div.className = "line " + classifyLine(text);
+    div.textContent = text;
+    panel.appendChild(div);
+    panel.scrollTop = panel.scrollHeight;
+  }
+
+  function classifyLine(t) {
+    if (/SCALPING/i.test(t))  return "line-scalp";
+    if (/GANADOR|WINNER|🏆/i.test(t)) return "line-win";
+    if (/BUY SIGNAL|✅/i.test(t)) return "line-buy";
+    if (/⚠|penalización|ausente/i.test(t)) return "line-warn";
+    if (/error|❌/i.test(t))  return "line-err";
+    return "line-info";
+  }
+
+  // ── Run ────────────────────────────────────────────────────────────────────
+  let evtSource = null;
+
+  function runAnalysis() {
+    const btn = document.getElementById("btnRun");
+    btn.disabled = true;
+    document.getElementById("btnIcon").innerHTML = '<div class="spinner"></div>';
+    document.getElementById("statusTxt").textContent = "Analizando…";
+    document.getElementById("logPanel").innerHTML = "";
+
+    fetch("/run", { method: "POST" })
+      .then(r => r.json())
+      .then(d => {
+        if (d.status === "already_running") {
+          alert("Ya hay un análisis en curso.");
+          btn.disabled = false;
+          document.getElementById("btnIcon").textContent = "▶";
+          return;
+        }
+        startStream();
+      })
+      .catch(e => {
+        appendLog("❌ Error al iniciar: " + e);
+        btn.disabled = false;
+        document.getElementById("btnIcon").textContent = "▶";
+      });
+  }
+
+  function startStream() {
+    if (evtSource) evtSource.close();
+    evtSource = new EventSource("/stream");
+
+    evtSource.onmessage = e => {
+      if (e.data === "__DONE__") {
+        evtSource.close();
+        document.getElementById("btnRun").disabled = false;
+        document.getElementById("btnIcon").textContent = "▶";
+        document.getElementById("statusTxt").textContent = "✅ Análisis completado.";
+        loadResultados();
+        return;
+      }
+      appendLog(JSON.parse(e.data));
+    };
+
+    evtSource.onerror = () => {
+      evtSource.close();
+      document.getElementById("btnRun").disabled = false;
+      document.getElementById("btnIcon").textContent = "▶";
+      document.getElementById("statusTxt").textContent = "⚠ Stream interrumpido.";
+    };
+  }
+
+  // ── Resultados ─────────────────────────────────────────────────────────────
+  function loadResultados() {
+    fetch("/resultados")
+      .then(r => r.json())
+      .then(data => renderResultados(data))
+      .catch(() => {});
+  }
+
+  function meaClass(v) {
+    if (v < -5)  return "mea-neg";
+    if (v > 5)   return "mea-pos";
+    return "mea-zero";
+  }
+
+  function renderResultados(data) {
+    const panel = document.getElementById("resultadosPanel");
+    if (!data || data.length === 0) {
+      panel.innerHTML = '<p id="noResultados">Sin resultados disponibles.</p>';
+      return;
+    }
+
+    let html = "";
+    for (const r of data) {
+      const señalesHtml = r.señales && r.señales.length
+        ? r.señales.map(s => {
+            if (s.tipo === "SCALPING")
+              return `<span class="señal señal-scalp">🎰 SCALPING ${s.equipo} MEA=${s.mea>0?"+":""}${s.mea}¢</span>`;
+            if (s.tipo === "GANADOR")
+              return `<span class="señal señal-win">🏆 GANADOR ${s.equipo} gap=${s.gap}¢</span>`;
+            if (s.tipo === "BUY")
+              return `<span class="señal señal-buy">✅ BUY ${s.equipo} MEA=${s.mea>0?"+":""}${s.mea}¢</span>`;
+            return "";
+          }).join("")
+        : '<span class="señal señal-none">⛔ Sin oportunidad</span>';
+
+      const notasHtml = r.notas
+        ? `<div class="notas-box">📋 ${r.notas}</div>` : "";
+
+      html += `
+      <div class="partido-card">
+        <div class="partido-title">⚾ ${r.away} @ ${r.home}</div>
+        <div class="stats-grid">
+          <div class="stat-box">
+            <div class="stat-label">Precio Polymarket</div>
+            <div class="stat-row">
+              <span class="stat-home">Local: ${r.poly_home}¢</span>
+              <span class="stat-away">Visit: ${r.poly_away}¢</span>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Valor Real</div>
+            <div class="stat-row">
+              <span class="stat-home">Local: ${r.valor_home}¢</span>
+              <span class="stat-away">Visit: ${r.valor_away}¢</span>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">MEA</div>
+            <div class="stat-row">
+              <span class="${meaClass(r.mea_home)}">Local: ${r.mea_home>0?"+":""}${r.mea_home}¢</span>
+              <span class="${meaClass(r.mea_away)}">Visit: ${r.mea_away>0?"+":""}${r.mea_away}¢</span>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Pitcher titular (ERA)</div>
+            <div class="stat-row" style="font-size:.78rem">
+              <span class="stat-home">${r.pitcher_home.nombre} (${r.pitcher_home.era})</span>
+              <span class="stat-away">${r.pitcher_away.nombre} (${r.pitcher_away.era})</span>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Racha últimos 10</div>
+            <div class="stat-row">
+              <span class="stat-home">Local: ${r.racha_home}%</span>
+              <span class="stat-away">Visit: ${r.racha_away}%</span>
+            </div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">P_Vegas</div>
+            <div class="stat-row">
+              <span class="stat-home">Local: ${r.p_vegas_home}¢</span>
+              <span class="stat-away">Visit: ${r.p_vegas_away}¢</span>
+            </div>
+          </div>
+        </div>
+        <div>${señalesHtml}</div>
+        ${notasHtml}
+      </div>`;
+    }
+
+    panel.innerHTML = html;
+  }
+
+  // Cargar resultados existentes al iniciar
+  loadResultados();
+</script>
+</body>
+</html>

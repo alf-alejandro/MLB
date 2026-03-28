@@ -1,28 +1,31 @@
 """
 Polymarket — Partidos MLB del día
-- Gamma API: eventos y mercados MLB
+- Gamma API: eventos MLB via tag_id=100381 (funciona para 2026+)
 - CLOB API:  precios reales en paralelo (ThreadPoolExecutor)
 
-Estructura real de los mercados MLB en Polymarket:
-  - Evento nivel día: {"id":"21729", "title":"MLB Games: March 28", "markets":[...]}
-  - Mercado por partido: {"question":"Will the Orioles beat the Blue Jays?",
-                          "outcomes":"[\"Orioles\",\"Blue Jays\"]",    ← JSON string
-                          "clobTokenIds":"[\"...\",\"...\"]",          ← JSON string
-                          "outcomePrices":"[\"0.55\",\"0.45\"]",       ← JSON string
-                          "active":true, "closed":false}
+Estructura real de los mercados MLB 2026 en Polymarket:
+  Evento: { "id", "title", "markets": [...] }
+  Mercado por partido: {
+      "question":       "Will the Rays beat the Cardinals?",
+      "outcomes":       "[\"Tampa Bay Rays\", \"St. Louis Cardinals\"]",  ← JSON string
+      "outcomePrices":  "[\"0.215\", \"0.785\"]",                         ← JSON string
+      "clobTokenIds":   "[\"...\", \"...\"]",                              ← JSON string
+      "sportsMarketType": "moneyline",
+      "gameStartTime":  "2026-03-28 18:15:00+00",
+      "active": true, "closed": false
+  }
 """
 
 import requests
 import json
-import re
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-GAMMA_API      = "https://gamma-api.polymarket.com"
-CLOB_API       = "https://clob.polymarket.com"
-MLB_SERIES_ID  = 10062
-HEADERS        = {"User-Agent": "Mozilla/5.0"}
-SESSION        = requests.Session()
+GAMMA_API   = "https://gamma-api.polymarket.com"
+CLOB_API    = "https://clob.polymarket.com"
+MLB_TAG_ID  = 100381    # tag "MLB" en Polymarket (válido 2025 y 2026+)
+HEADERS     = {"User-Agent": "Mozilla/5.0"}
+SESSION     = requests.Session()
 SESSION.headers.update(HEADERS)
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -44,58 +47,56 @@ def _parse_json_str(s) -> list:
             pass
     return []
 
-def _fecha_en_titulo(titulo: str, fecha: date) -> bool:
-    """True si el título del evento menciona la fecha dada."""
-    meses_en = {1:"january",2:"february",3:"march",4:"april",5:"may",6:"june",
-                7:"july",8:"august",9:"september",10:"october",11:"november",12:"december"}
-    mes  = meses_en[fecha.month]
-    dia  = str(fecha.day)
-    t    = titulo.lower()
-    return mes in t and dia in t
+def _es_hoy(gameStartTime: str) -> bool:
+    """True si gameStartTime corresponde al día de hoy (UTC)."""
+    if not gameStartTime:
+        return False
+    try:
+        # Formato: "2026-03-28 18:15:00+00" o ISO 8601
+        ts = gameStartTime.replace(" ", "T")
+        if not ts.endswith("Z") and "+" not in ts[-6:]:
+            ts += "Z"
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return dt.date() == date.today()
+    except Exception:
+        # Fallback: buscar la fecha como string
+        hoy = date.today().isoformat()  # "2026-03-28"
+        return hoy in gameStartTime
 
 # ── Gamma API ──────────────────────────────────────────────────────────────────
 
 def obtener_partidos_hoy() -> list[dict]:
     """
-    Devuelve lista de partidos MLB de HOY con su mercado moneyline.
+    Devuelve lista de partidos MLB moneyline de HOY.
     Cada entry: {
         "titulo":    str,
         "evento_id": str,
-        "moneyline": {"market_id", "pregunta", "volumen", "tokens":[{token_id, equipo}]}
+        "moneyline": {
+            "market_id": str,
+            "pregunta":  str,
+            "volumen":   float,
+            "tokens":    [{"token_id": str, "equipo": str}, ...]
+        }
     }
     """
-    hoy = date.today()
-
-    # Buscar en un rango amplio (sin filtro de fecha para no perder eventos)
-    eventos = _fetch_eventos_recientes()
-
-    # Filtrar los del día de hoy por título
-    eventos_hoy = [e for e in eventos if _fecha_en_titulo(e.get("title",""), hoy)]
-
-    if not eventos_hoy:
-        # Intentar buscar explícitamente por slug
-        eventos_hoy = _buscar_por_slug(hoy)
-
-    if not eventos_hoy:
-        return []
-
+    eventos = _fetch_eventos_mlb()
     partidos = []
-    for evento in eventos_hoy:
-        mercados_raw = evento.get("markets") or []
 
-        # Si el evento no trae los mercados expandidos, pedirlos por separado
-        if not mercados_raw or not isinstance(mercados_raw[0], dict):
-            mercados_raw = _fetch_mercados_evento(evento["id"])
-
-        for m in mercados_raw:
+    for evento in eventos:
+        mercados = evento.get("markets") or []
+        for m in mercados:
             if not isinstance(m, dict):
                 continue
+            # Solo moneyline activos de hoy
+            if m.get("sportsMarketType") != "moneyline":
+                continue
             if m.get("closed") or not m.get("active", True):
+                continue
+            if not _es_hoy(m.get("gameStartTime", "")):
                 continue
 
             token_ids = _parse_json_str(m.get("clobTokenIds", "[]"))
             outcomes  = _parse_json_str(m.get("outcomes",    "[]"))
-            prices    = _parse_json_str(m.get("outcomePrices","[]"))
 
             if len(token_ids) < 2 or len(outcomes) < 2:
                 continue
@@ -105,76 +106,38 @@ def obtener_partidos_hoy() -> list[dict]:
                 for i in range(min(len(token_ids), len(outcomes)))
             ]
 
-            pregunta = m.get("question", "")
             partidos.append({
-                "titulo":     pregunta or f"{outcomes[0]} vs {outcomes[1]}",
+                "titulo":     m.get("question", f"{outcomes[0]} vs {outcomes[1]}"),
                 "evento_id":  evento.get("id"),
                 "moneyline": {
-                    "market_id": m.get("id"),
-                    "pregunta":  pregunta,
-                    "volumen":   float(m.get("volume") or m.get("volumeNum") or 0),
+                    "market_id": str(m.get("id", "")),
+                    "pregunta":  m.get("question", ""),
+                    "volumen":   float(m.get("volumeNum") or m.get("volume") or 0),
                     "tokens":    tokens,
+                    "game_time": m.get("gameStartTime", ""),
                 },
             })
 
     return partidos
 
 
-def _fetch_eventos_recientes(dias_adelante: int = 7) -> list[dict]:
-    """Trae los eventos MLB más recientes (sin filtro de fecha estricto)."""
-    hoy      = date.today()
-    manana   = hoy + timedelta(days=1)
-    siguiente = hoy + timedelta(days=dias_adelante)
-
-    # Intentar 1: con start_date_min/max
-    for params in [
-        {"series_id": MLB_SERIES_ID, "start_date_min": hoy.isoformat(),
-         "start_date_max": siguiente.isoformat(), "limit": 10},
-        {"series_id": MLB_SERIES_ID, "limit": 20},          # sin filtro fecha
-    ]:
-        try:
-            resp = SESSION.get(f"{GAMMA_API}/events", params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
-                return data if isinstance(data, list) else [data]
-        except Exception:
-            pass
-    return []
-
-
-def _buscar_por_slug(fecha: date) -> list[dict]:
-    """Intenta encontrar el evento MLB del día por slug."""
-    meses_en = {1:"january",2:"february",3:"march",4:"april",5:"may",6:"june",
-                7:"july",8:"august",9:"september",10:"october",11:"november",12:"december"}
-    mes = meses_en[fecha.month]
-    dia = str(fecha.day)
-
-    slugs = [
-        f"mlb-games-{mes}-{dia}",
-        f"mlb-{mes}-{dia}",
-    ]
-
-    for slug in slugs:
-        try:
-            resp = SESSION.get(f"{GAMMA_API}/events", params={"slug": slug}, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
-                return data if isinstance(data, list) else [data]
-        except Exception:
-            pass
-    return []
-
-
-def _fetch_mercados_evento(evento_id: str) -> list[dict]:
-    """Trae los mercados individuales de un evento."""
+def _fetch_eventos_mlb() -> list[dict]:
+    """Trae todos los eventos MLB activos desde Polymarket usando tag_id."""
+    params = {
+        "tag_id":    MLB_TAG_ID,
+        "active":    "true",
+        "closed":    "false",
+        "limit":     50,
+        "order":     "startDate",
+        "ascending": "true",
+    }
     try:
-        resp = SESSION.get(f"{GAMMA_API}/markets",
-                           params={"event_id": evento_id, "limit": 50}, timeout=15)
+        resp = SESSION.get(f"{GAMMA_API}/events", params=params, timeout=15)
         resp.raise_for_status()
-        return resp.json()
-    except Exception:
+        data = resp.json()
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        print(f"  ⚠ Error consultando Gamma API: {e}")
         return []
 
 
@@ -224,41 +187,39 @@ def obtener_precios_paralelo(token_ids: list[str], workers: int = 25) -> dict[st
 
 def diagnosticar_api():
     """Muestra info de diagnóstico sobre los mercados MLB disponibles."""
-    print(f"\n[DIAGNÓSTICO] Consultando API Polymarket para MLB (series_id={MLB_SERIES_ID})...\n")
+    print(f"\n[DIAGNÓSTICO] Consultando Polymarket (tag_id={MLB_TAG_ID})...\n")
 
-    # Últimos eventos (sin filtro)
-    try:
-        resp = SESSION.get(f"{GAMMA_API}/events",
-                           params={"series_id": MLB_SERIES_ID, "limit": 5}, timeout=15)
-        data = resp.json()
-        if isinstance(data, list) and data:
-            print(f"Últimos {len(data)} evento(s) MLB encontrados:")
-            for e in data:
-                estado = "CERRADO" if e.get("closed") else "ABIERTO"
-                print(f"  [{estado}] ID={e.get('id')} — {e.get('title')} — vol=${e.get('volume',0):,.0f}")
-        else:
-            print("Sin eventos MLB en la respuesta.")
-    except Exception as ex:
-        print(f"Error consultando eventos: {ex}")
+    eventos = _fetch_eventos_mlb()
+    juegos_total = 0
+    juegos_hoy   = 0
 
-    # Mercados abiertos
-    try:
-        resp = SESSION.get(f"{GAMMA_API}/markets",
-                           params={"series_id": MLB_SERIES_ID, "closed": "false", "limit": 5},
-                           timeout=15)
-        data = resp.json()
-        if isinstance(data, list) and data:
-            print(f"\nMercados MLB ABIERTOS encontrados: {len(data)}")
-            for m in data:
-                print(f"  ID={m.get('id')} — {m.get('question','?')[:60]}")
-        else:
-            print("\nNo hay mercados MLB abiertos en este momento.")
-            print("Posibles razones:")
-            print("  • La temporada MLB 2026 aún no ha comenzado en Polymarket")
-            print("  • Opening Day todavía no está listado (suele aparecer ~3 días antes)")
-            print("  • Los partidos de hoy ya cerraron o aún no abrieron")
-    except Exception as ex:
-        print(f"Error consultando mercados abiertos: {ex}")
+    for evento in eventos:
+        for m in (evento.get("markets") or []):
+            if isinstance(m, dict) and m.get("sportsMarketType") == "moneyline":
+                juegos_total += 1
+                if _es_hoy(m.get("gameStartTime", "")):
+                    juegos_hoy += 1
+                    print(f"  HOY  ⚾ {m.get('question','?')[:55]}  "
+                          f"({m.get('gameStartTime','?')[:16]})")
+
+    print(f"\n  Total partidos MLB abiertos: {juegos_total}")
+    print(f"  Partidos de HOY ({date.today()}): {juegos_hoy}")
+
+    if juegos_hoy == 0 and juegos_total > 0:
+        print("\n  Próximos partidos disponibles:")
+        mostrados = 0
+        for evento in eventos:
+            for m in (evento.get("markets") or []):
+                if isinstance(m, dict) and m.get("sportsMarketType") == "moneyline" and not m.get("closed"):
+                    print(f"    ⚾ {m.get('question','?')[:55]}  ({m.get('gameStartTime','?')[:16]})")
+                    mostrados += 1
+                    if mostrados >= 5:
+                        break
+            if mostrados >= 5:
+                break
+
+    if juegos_total == 0:
+        print("  Sin partidos MLB activos. Opening Day posiblemente no está listado aún.")
 
 
 # ── Ejecución directa ─────────────────────────────────────────────────────────
@@ -277,7 +238,8 @@ if __name__ == "__main__":
 
         for p in partidos:
             m = p["moneyline"]
-            print(f"  ⚾  {p['titulo']}")
+            gt = m.get("game_time", "")[:16]
+            print(f"  ⚾  {p['titulo']}  [{gt}]")
             for t in m["tokens"]:
                 precio = precios.get(t["token_id"])
                 print(f"     {t['equipo']:30s}  {centavos(precio) if precio is not None else 'sin precio'}")

@@ -88,6 +88,7 @@ _spec.loader.exec_module(_mlb_poly)
 
 obtener_partidos_hoy     = _mlb_poly.obtener_partidos_hoy
 obtener_precios_paralelo = _mlb_poly.obtener_precios_paralelo
+enriquecer_con_gamma     = _mlb_poly.enriquecer_con_gamma
 hora_et                  = _mlb_poly.hora_et
 centavos                 = _mlb_poly.centavos
 diagnosticar_api         = _mlb_poly.diagnosticar_api
@@ -344,49 +345,6 @@ def calcular_mea(ai: dict, precio_home: float, precio_away: float,
 
 # ── Output ─────────────────────────────────────────────────────────────────────
 
-def _extraer_equipos(partido: dict) -> tuple[str, str]:
-    """
-    Extrae (home, away) del partido.
-    En MLB Polymarket el primer outcome suele ser el equipo visitante
-    y el segundo el local, pero la pregunta dice "Will X beat Y?" → X=away, Y=home.
-    Usamos los tokens tal como vienen: tokens[0]=equipo_A, tokens[1]=equipo_B.
-    El equipo LOCAL normalmente es el segundo en "X @ Y" o viene mencionado segundo.
-    """
-    ml = partido.get("moneyline", {})
-    if ml:
-        tokens = ml.get("tokens", [])
-        if len(tokens) >= 2:
-            # Intentar detectar local por pregunta ("beat the X" → X es local)
-            pregunta = ml.get("pregunta", "").lower()
-            t0, t1 = tokens[0]["equipo"], tokens[1]["equipo"]
-
-            # "Will [away] beat the [home]?" o "Will [away] beat [home]?"
-            # El equipo mencionado DESPUÉS de "beat" es el local
-            m = re.search(r"beat(?: the)? (.+?)(?:\?|$)", pregunta, re.IGNORECASE)
-            if m:
-                probable_home = m.group(1).strip().lower()
-                if probable_home in t1.lower():
-                    return t1, t0  # (home, away)
-                if probable_home in t0.lower():
-                    return t0, t1
-
-            return tokens[1]["equipo"], tokens[0]["equipo"]  # convención: [1]=home
-    return "Team A", "Team B"
-
-
-def _tokens_moneyline(partido: dict) -> tuple[str | None, str | None]:
-    """Devuelve (token_id_home, token_id_away) del mercado moneyline."""
-    ml = partido.get("moneyline", {})
-    if ml:
-        tokens = ml.get("tokens", [])
-        if len(tokens) >= 2:
-            home, away = _extraer_equipos(partido)
-            home_tok = next((t for t in tokens if t["equipo"] == home), tokens[1])
-            away_tok = next((t for t in tokens if t["equipo"] == away), tokens[0])
-            return home_tok["token_id"], away_tok["token_id"]
-    return None, None
-
-
 def imprimir_resultado(r: dict):
     sep = "─" * 60
     print(f"\n{sep}")
@@ -444,29 +402,36 @@ def main():
 
     print(f"  Encontrados {len(partidos)} partido(s).\n")
 
-    # ── 2) Traer precios CLOB en paralelo ─────────────────────────────────────
-    all_tokens = [t["token_id"] for p in partidos for t in p["moneyline"]["tokens"]]
+    # ── 2) Traer precios CLOB + fallback Gamma ────────────────────────────────
+    all_tokens = list({tid for p in partidos for tid in p["token_ids"]})
 
     print(f"💰  Trayendo precios para {len(all_tokens)} tokens (paralelo)...")
-    precios = obtener_precios_paralelo(list(set(all_tokens)))
-    print(f"  Precios obtenidos: {len(precios)}/{len(set(all_tokens))}\n")
+    precios_clob = obtener_precios_paralelo(all_tokens)
+    precios      = enriquecer_con_gamma(partidos, precios_clob)
+    print(f"  CLOB: {len(precios_clob)} | Gamma: {len(precios)-len(precios_clob)} | Total: {len(precios)}/{len(all_tokens)}\n")
 
     # ── 3) Analizar cada partido ───────────────────────────────────────────────
     resultados = []
 
     for i, partido in enumerate(partidos):
-        home, away = _extraer_equipos(partido)
-        tid_home, tid_away = _tokens_moneyline(partido)
+        outcomes   = partido["outcomes"]
+        token_ids  = partido["token_ids"]
 
-        if not tid_home or not tid_away:
-            print(f"  [{i+1}] Sin tokens moneyline para {home} vs {away}, skip.")
+        if len(outcomes) < 2 or len(token_ids) < 2:
             continue
+
+        # En MLB Polymarket: outcomes[0]=equipo visitante, outcomes[1]=equipo local
+        # (la pregunta dice "Will [away] beat [home]?")
+        away = outcomes[0]
+        home = outcomes[1]
+        tid_away = token_ids[0]
+        tid_home = token_ids[1]
 
         p_home = precios.get(tid_home)
         p_away = precios.get(tid_away)
 
         if p_home is None or p_away is None:
-            print(f"  [{i+1}] Sin precios para {home} vs {away}, skip.")
+            print(f"  [{i+1}] Sin precios para {away} @ {home}, skip.")
             continue
 
         print(f"🤖  [{i+1}/{len(partidos)}]  Analizando con Gemini: {away} @ {home}  "

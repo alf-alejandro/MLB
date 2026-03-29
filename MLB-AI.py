@@ -54,7 +54,7 @@ from google.genai import types
 # ── configuración ─────────────────────────────────────────────────────────────
 
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL    = "gemini-flash-lite-latest"
+GEMINI_MODEL    = "gemini-3.1-flash-lite-preview"
 GEMINI_CALLS    = 5        # llamadas por partido para promediar
 GEMINI_WORKERS  = 4        # llamadas Gemini en paralelo
 
